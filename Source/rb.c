@@ -803,6 +803,10 @@ rbnode **rb_node_array(rbtree *rbt, int threads, mydata *data_array)
 		traversal(rbt, myroot, result_array, data_array, &index);
 	}
 
+	free(excluded_nodes);
+	free(included_roots);
+	free(offset);
+	
 	return result_array;
 };
 
