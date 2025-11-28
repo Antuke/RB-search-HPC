@@ -1,0 +1,804 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{hyperref}
+\usepackage{biblatex}
+\usepackage{pgfplots}
+\usepackage{listings, xcolor}
+\usepackage{csvsimple}
+\usepackage[
+    type={CC},
+    modifier={by-nc-sa},
+    version={4.0},
+]{doclicense}
+\usepackage{courier} %% Sets font for listing as Courier.
+\lstset{
+tabsize = 4, %% set tab space width
+showstringspaces = false, %% prevent space marking in strings, string is defined as the text that is generally printed directly to the console
+numbers = left, %% display line numbers on the left
+commentstyle = \color{orange}, %% set comment color
+keywordstyle = \color{blue}, %% set keyword color
+stringstyle = \color{red}, %% set string color
+rulecolor = \color{black}, %% set frame color to avoid being affected by text color
+basicstyle = \small \ttfamily , %% set listing font and size
+breaklines = true, %% enable line breaking
+numberstyle = \tiny,
+}
+\addbibresource{biblio.bib}
+\begin{document}
+\doclicenseThis
+\begin{titlepage}
+    \centering
+    \vfill
+    {\bfseries\Large
+        Report RBSearch\\
+        Parallelizzata con MPI + OpenMP e CUDA + OpenMP\\
+        \vskip2cm
+        Autore: Antonio Sessa\\
+        Email:\href{mailto:a.sessa108@studenti.unisa.it}{a.sessa108@studenti.unisa.it}
+
+        Matricola: 0622702305
+
+        Professore: Francesco Moscato \href{mailto:fmoscato@unisa.it}{fmoscato@unisa.it}
+        
+        Gennaio 2024
+    }    
+    \vfill
+    \vfill
+    \vfill
+    
+\end{titlepage}
+\tableofcontents
+\section{Descrizione del problema}
+Presentare una versione parallela dell’algoritmo di ricerca su un Red Black Tree con “OpenMP + MPI” e “Cuda + MPI” e compare gli algoritmi proposti con una soluzione nota con un singolo processing-node.
+\section{Soluzione proposta}
+\subsection{Soluzione single processing-node}
+L’algoritmo di ricerca su un Red-Black Tree è identico all’algoritmo di ricerca per gli alberi binari di ricerca non bilanciati, ed è quindi la ricerca binaria.
+E’ un algoritmo con complessità computazionale O(h) negli alberi binari di ricerca e di complessità o(log n) nei Red Black Tree per via della loro proprietà di essere bilanciati ( i Red Black Tree hanno una altezza massima pari a 2*log(n+1) ).
+\subsection{Approccio MPI}
+L’idea di base per l’approccio MPI è il seguente:
+\begin{itemize}
+    \item Un processo, che possiamo denominare “master”, si occupa dell’inizializzazione del Red Black Tree.
+    \item Il processo master divide l’albero in N sottoalberi, dove N rappresenta il numero di processi disponibili.
+    \item Ogni processo esegue la ricerca binaria sul suo sottoalbero.
+    \item Una volta terminata la ricerca binaria su ogni sottoalbero, ogni processo invia al processo master i risultati della ricerca.
+    \item Il processo master analizza i risultati ricevuti per determinare se il nodo è stato trovato; in caso affermativo, recupera il nodo.
+\end{itemize} 
+Data che l'inizializzazione dell'albero prevede la lettura da un file dei valori, si potrebbe pensare di avere che ogni processo legga dal file a partire da un offset, e si crei così la propria parte di Red Black Tree. Una volta creata la propria parte di Red Black Tree, eseguire la ricerca ed inviare il nodo trovato (se trovato) al  processo master. Il problema è che  la struttura dati che rappresenta il nodo contiene i puntatori al figlio destro e al figlio sinistro, che diventerebbero non significativi nell'area di memoria del processo master e quindi questa soluzione non funzionerebbe.
+\subsection{Approccio Cuda}
+L’idea alla base per l’approccio CUDA è il seguente:
+\begin{itemize}
+    \item L’host si occupa dell’inizializzazione del Red Black Tree
+    \item L’host carica per intero l’albero sul dispositivo.
+    \item Il dispositivo controlla ogni nodo dell’albero (ogni thread un nodo).
+    \item Se il dispositivo trova il nodo contenente il dato cercato, lo restituisce all'host.
+\end{itemize}
+\subsection{Linearizzazione dell'albero}
+La rappresentazione dell'albero utilizzato per i test non è contigua in memoria. Pertanto, sia per MPI che per CUDA, è stato necessario linearizzare l'albero. Questo perché il processo master non condivide la stessa area di memoria degli altri processi, e lo stesso vale per l'host e il device. La linearizzazione viene quindi fatta dal processo master / host sfruttando OpenMP.
+Per trasformare l’albero in un array ordinato, con l’ausilio di OpenMP si fanno due assunzioni:
+\begin{itemize}
+    \item Si usano N thread, dove N è una potenza di due
+    \item L’albero è pieno al livello log2(N) 
+\end{itemize}
+
+
+
+\subsection{Approccio OpenMP alla linearizzazione}
+L’idea alla base dell’approccio OpenMP con N Thread alla linearizzazione è il seguente:
+\begin{itemize}
+    \item 	Gli N-1 nodi (sono N-1 perché assumiamo che il livello log2(N) sia pieno) che si trovano ai livelli prima di log2(N) vengono salvati in un array ordinato
+    \item Si salvano gli N nodi che si trovano al livello log2(N) (pieno per assunzione) in un array ordinato.
+    \item	Si affida il nodo i-esimo dell’array dei nodi al livello log2(N) al thread i-esimo (identificati coi loro id).
+    \item	Conoscendo il numero di nodi che ogni thread visiterà (nella rappresentazione dei nodi è stata aggiunta una variabile che salva il numero di numero di nodi nel sottoalbero radicato in quel nodo) possiamo calcolarci dove ogni thread dovrà scrivere in un array condiviso, che rappresenta l’albero linearizzato e dove inserire gli N-1 nodi esclusi nell’array.
+    \item	Ogni thread esegue un traversamento in ordine dell’albero salvandosi i nodi nell’array condiviso.
+\end{itemize}
+In questo modo otteniamo un array ordinato che rappresenta il Red-Black Tree.
+\subsection{Il (non) approccio OpenMP alla ricerca binaria}
+OpenMP potrebbe essere usato anche all’interno della ricerca binaria eseguita da ogni processo nell’approccio MPI. Si è preferito però non implementare questa possibile soluzione, dopo aver analizzato i risultati del seguente report pubblicato dall'utente GitHub \textsc{dvasavda} : \href{https://github.com/dvasavda/openmp-binary-search/blob/master/Report.pdf}{Link al Report}.
+La conlcusioni a cui arriva il report, dopo l'analisi dei test effettuati, è che l'operazione di ricerca binaria non è sufficientemente costosa per benificiare della parallellizzazione.\cite{ompParallel}. Inoltre va considerato, che testando tutto su una singola macchina l'overhead dovuta alla creazione dei thread sarebbe ancora maggiore (se impostiamo 4 omp thread e abbiamo 8 processi, verebbero genarati 32 thread che dovrebbero eseguire in parallelo sulla stessa cpu) .
+\section{Dati,Taglie,Ottimizzazioni}
+Ogni test case differisce per livello di compilazione, tipo di dato, e dimensione dell’albero.
+In particolare,
+\begin{itemize}
+    \item testiamo per i livelli di compilazione -O0,-O1,-O2,-O3.
+    \item testiamo per tre taglie diverse: 10000, 100000, 1000000
+    \item per due tipi di dati: intero e array di interi di 100000 elementi\footnote{L’array di interi di centomila elementi non verrà veramente caricato in memoria ma verrà solo usato per simulare una operazione di comparazione più lunga.}. I dati inseriti saranno casuali.
+\end{itemize}
+Testiamo per il tipo di dato array di 100000 elementi per avere un funzione di comparazione più onerosa.
+Per ogni test il valore cercato è il valore più grande.
+Ogni esecuzione dell’algoritmo CUDA ed MPI prevede anche la verifica con la versione seriale (questa non viene conteggiata nei tempi).
+\newpage
+\section{Setup Hardware}
+\subsection{CPU}
+\begin{lstlisting}[language = bash] 
+Architecture:            x86_64
+  CPU op-mode(s):        32-bit, 64-bit
+  Address sizes:         39 bits physical, 48 bits virtual
+  Byte Order:            Little Endian
+CPU(s):                  6
+  On-line CPU(s) list:   0-5
+Vendor ID:               GenuineIntel
+  Model name:            Intel(R) Core(TM) i5-8400 CPU @ 2.80GHz
+    CPU family:          6
+    Model:               158
+    Thread(s) per core:  1
+    Core(s) per socket:  6
+    Socket(s):           1
+    Stepping:            10
+    BogoMIPS:            5616.00
+    Flags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse ss
+                         e2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid p
+                         ni pclmulqdq ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hype
+                         rvisor lahf_lm abm 3dnowprefetch invpcid_single pti ssbd ibrs ibpb stibp fsgsbase bmi1 avx2 sme
+                         p bmi2 erms invpcid rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves md_clear flush_l1
+                         d arch_capabilities
+Virtualization features:
+  Hypervisor vendor:     Microsoft
+  Virtualization type:   full
+Caches (sum of all):
+  L1d:                   192 KiB (6 instances)
+  L1i:                   192 KiB (6 instances)
+  L2:                    1.5 MiB (6 instances)
+  L3:                    9 MiB (1 instance)
+\end{lstlisting}
+\subsection{RAM}
+\begin{lstlisting}[language = bash]
+Density:                16GB
+\end{lstlisting}
+\newpage
+\subsection{GPU}
+\begin{lstlisting}[language = bash]
+CUDA Version:           12.3
+GPU  Name:              NVIDIA GeForce RTX 3060 Ti
+Memory Size:            8 GB
+Memory Type:            GDDR6
+Memory Bus:             256 bit
+Bandwidth:              448.0 GB/s
+L1 Cache:               128 KB (per SM)
+L2 Cache:               4 MB
+Compute Capability:     8.6
+NVIDIA CUDA Cores:      4864
+SM Count:               38
+\end{lstlisting}
+\subsubsection{C.C 8.6}
+\begin{lstlisting}[language = bash]
+Blocks per SM:      16
+Thread per SM:      1536
+Registers per SM:   65536
+\end{lstlisting}
+\subsubsection{Risultati del bandwidthTest}
+\begin{lstlisting}[language = bash]
+ Device 0: NVIDIA GeForce RTX 3060 Ti
+ Quick Mode
+
+ Host to Device Bandwidth, 1 Device(s)
+ PINNED Memory Transfers
+   Transfer Size (Bytes)        Bandwidth(GB/s)
+   32000000                     12.5
+
+ Device to Host Bandwidth, 1 Device(s)
+ PINNED Memory Transfers
+   Transfer Size (Bytes)        Bandwidth(GB/s)
+   32000000                     11.9
+
+ Device to Device Bandwidth, 1 Device(s)
+ PINNED Memory Transfers
+   Transfer Size (Bytes)        Bandwidth(GB/s)
+   32000000                     400.7
+\end{lstlisting}
+
+
+\section{Risultati}
+I risultati riportati sono i valori minimi ricavati dopo 50 iterazioni. Il codice sorgente produce anche tabelle con i valori medii (ottenuti anche scartando eventuali valori troppo grandi / piccoli). Si è preferito riportare nel report i valori minimi per gestire la variabilità dei tempi (il programma può venire rallentato da fattori esterni, quindi il run-time minimo è considerabile più veritiero). In particolare, i tempi minimi sono per ogni campo (questo spiega la discrepanza tra total time e gli altri campi). Il tipo di dato riportato nelle seguenti tabelle è array di 100000 elementi. Il codice sorgente produce anche tabelle per il tipo di dato intero, ma essendo la ricerca binaria su un albero di interi troppo veloce, viene sempre riportato 0.000 secondi come tempo di esecuzione.
+I campi controllati per MPI sono i seguenti:
+\begin{itemize}
+    \item tempo totale
+    \item tempo di comunicazione, il tempo impiegato per eseguire le funzioni di passaggio dati di MPI, in particolare sono una broadcast, una scatter e una gather
+    \item tempo della ricerca binaria, misurata sul processo 0.\footnote{Per come è strutturato il programma il processo 0 non sarà mai quello che troverà l'elemento cercato}
+    \item tempo di creazione dell'albero
+    \item tempo di linearizzazione dell'albero
+\end{itemize}
+I campi controllati per CUDA sono i seguenti:
+\begin{itemize}
+    \item tempo totale
+    \item tempo GPU, ovvero le GPU Activities (Kernel + Memcpy)
+    \item tempo esecuzione della intera funzione di ricerca con CUDA, ovvero GPU Activities + tree linearization + CUDA API Calls (cudaMallocHost + cudaLaunchKernel)
+    \item tempo di creazione dell'albero
+    \item tempo di linearizzazione dell'albero
+\end{itemize}
+I campi controllati per la versione seriale sono i seguenti:
+\begin{itemize}
+    \item tempo totale
+    \item tempo di ricerca
+    \item tempo di creazione dell'albero
+\end{itemize}
+Per MPI verranno eseguiti i test per diverse configurazione di numero di processi, numero di thread OpenMP taglie o ottimizzazioni.
+Per Cuda verranno eseguiti i test per diversi numeri di thread CUDA, numero di thread OpenMP taglie o ottimizzazioni.
+Per CUDA abbiamo una occupancy (il rapporto tra il numero di warp attivi per multiprocessor e il numero massimo di warp attivi possibili) teorica del 100\%  per 256 e 512 thread,mentre per 1024 una occupancy teoretica del 66.67\%\footnote{Valori ottenuti con il tool NVIDIA Nsight Compute, visionabili nella cartella Nsights}
+Per il seriale verrano eseguite i test per diverse taglie e ottimizzazioni.
+%ottimizzazione 0
+\subsection{Ottizzazione 0}
+
+\subsubsection{Taglia 10000 MPI}
+\csvautotabular{O0_SIZE1_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 10000 CUDA}
+\csvautotabular{00_SIZE1_Cuda.csv}
+
+\subsubsection{Taglia 10000 Seriale}
+\csvautotabular{O0_SIZE1_lc_Serial_min.csv}
+
+\subsubsection{Taglia 100000 MPI}
+\csvautotabular{O0_SIZE2_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 100000 CUDA}
+\csvautotabular{00_SIZE2_Cuda.csv}
+
+\subsubsection{Taglia 100000 Seriale}
+\csvautotabular{O0_SIZE2_lc_Serial_min.csv}
+
+\subsubsection{Taglia 1000000 MPI}
+\csvautotabular{O0_SIZE3_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 1000000 CUDA}
+\csvautotabular{00_SIZE3_Cuda.csv}
+
+\subsubsection{Taglia 1000000 Seriale}
+\csvautotabular{O0_SIZE3_lc_Serial_min.csv}
+
+\subsection{Considerazioni, Speedup ed Efficiency}
+Come ci si poteva aspettare, anche dopo aver analizzando il report sulla parallelizzazione della ricerca binaria \cite{ompParallel}, l'algoritmo che ottiene prestazioni migliori è quello seriale, questo è vero per qualsiasi taglia. 
+Essendo la ricerca su un albero bilanciato poco costosa computazionalmente, i benefici della parallelizzazione vengono superati dai deficit (come gli overhead di comunicazione, thread spawning, l'aumento delle chiamate di funzione).
+Anche non considerando la necessità di linearizzare l'albero, che potrebbe essere evitata con una rappresentazione contigua in memoria, difficilmente si possono ottenere prestazioni migliori della versione seriale.
+
+Per i test con MPI dobbiamo anche tenere in considerazione che nei test lo usiamo su una singola macchina e non su un cluster per come è pensato, essendo un protocollo di comunicazione.
+
+Per CUDA, pure se la funzione kernel è computazionalmente meno costosa, rimane l'overhead di dover spostare l'albero dalla memoria dell'host a quella del device. Inoltre non sembra esserci differenza tra l'utilizzo di blocchi di 256/512/1024 thread.
+
+C'è anche da tenere in conto che i test riportati sono con dei dati che hanno una operazione di comparazione artificialmente resa più lunga. 
+
+In contrasto, prendiamo in considerazione l'operazione di linearizzazione, parallelizzata con OpenMP. Per la prima taglia, l'overhead della parallelizzazione non produce alcuno speep-up.
+Per la seconda taglia abbiamo uno speed-up significativo che è ancora migliore per la terza, che ci suggerisce un rapporto proporzionale tra la taglia e lo speedup.
+
+In particolare, per la taglia pari a 100000 abbiamo lo speed-up maggiore con 4 thread\footnote{Valori presi da riga 16 e riga 17 dalla tabella MPI taglia 100000}:
+
+\[Speedup = 0.0027/0.0018 \approx 150\% \]
+
+\[Efficienza = (0.0027/0.0018)/4 \approx 37\% \]
+
+Per la taglia 1000000 abbiamo lo speed-up maggiore con 16 thread\footnote{Valori presi da riga 1 e riga 15 dalla tabella MPI taglia 1000000}:
+
+\[Speedup = 0.0845/0.0220 \approx 384\% \]
+
+\[Efficienza = (0.0845/0.0220)/16 \approx 24\% \]
+
+\begin{tikzpicture}
+    \begin{axis}[
+        title={Speedup ideale (BLU) e speedup reale (ROSSO) taglia 1000000},
+        xlabel={Numero di thread},
+        ylabel={Speedup},
+        xmin=1, xmax=16, 
+        ymin=1, ymax=16, 
+        grid=major,
+        ytick={2,4,6,8,10,12,14,16}
+    ]
+    
+    \addplot[blue,mark=*] table {
+        Threads Speedup
+        1 1
+        4 4
+        8 8
+        16 16
+    };
+    
+    
+    \addplot[red, mark=*] table {
+        Threads Speedup
+        1 1
+        4 2.70
+        8 3.7
+        16 3.84
+    };
+    
+    
+    \end{axis}
+\end{tikzpicture}
+
+Essendo la linearizzazione una operazione equivalente a una visita in order, ha una complessità computazionale pari ad \(o(N)\) e quindi può beneficiare dei vantaggi della parallelizzazione. Inoltre notiamo dal grafico dello speedup, che la differenza tra 8 e 16 thread è praticamente nulla, il motivo è che la Cpu dove vengono eseguiti i test ha 6 thread (i test per 6 thread non sono potuti essere eseguiti, data la necessità che i thread siano potenza di due). 
+
+
+
+
+
+Di seguito vengono riportati i risultati per le ottimizzazioni O1,O2 ed O3.
+%ottimizzazione 1
+\newpage
+\subsection{Ottizzazione 1}
+\subsubsection{Taglia 10000 MPI}
+\csvautotabular{O1_SIZE1_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 10000 CUDA}
+\csvautotabular{O1_SIZE1_Cuda.csv}
+
+\subsubsection{Taglia 10000 Seriale}
+\csvautotabular{O1_SIZE1_lc_Serial_min.csv}
+
+\subsubsection{Taglia 100000 MPI}
+\csvautotabular{O1_SIZE2_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 100000 CUDA}
+\csvautotabular{O1_SIZE2_Cuda_min.csv}
+
+\subsubsection{Taglia 100000 Seriale}
+\csvautotabular{O1_SIZE2_lc_Serial_min.csv}
+
+\subsubsection{Taglia 1000000 MPI}
+\csvautotabular{O1_SIZE3_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 1000000 CUDA}
+\csvautotabular{O1_SIZE3_Cuda_min.csv}
+
+\subsubsection{Taglia 1000000 Seriale}
+\csvautotabular{O1_SIZE3_lc_Serial_min.csv}
+
+%ottimizzazione 2
+\subsection{Ottizzazione 2}
+\subsubsection{Taglia 10000 MPI}
+\csvautotabular{O2_SIZE1_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 10000 CUDA}
+\csvautotabular{O2_SIZE1_Cuda.csv}
+
+\subsubsection{Taglia 10000 Seriale}
+\csvautotabular{O2_SIZE1_lc_Serial_min.csv}
+
+\subsubsection{Taglia 100000 MPI}
+\csvautotabular{O2_SIZE2_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 100000 CUDA}
+\csvautotabular{O2_SIZE2_Cuda_min.csv}
+
+\subsubsection{Taglia 100000 Seriale}
+\csvautotabular{O2_SIZE2_lc_Serial_min.csv}
+
+\subsubsection{Taglia 1000000 MPI}
+\csvautotabular{O2_SIZE3_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 1000000 CUDA}
+\csvautotabular{O2_SIZE3_Cuda_min.csv}
+
+\subsubsection{Taglia 1000000 Seriale}
+\csvautotabular{O2_SIZE3_lc_Serial_min.csv}
+
+%ottimizzazione 3
+\subsection{Ottizzazione 3}
+\subsubsection{Taglia 10000 MPI}
+\csvautotabular{O3_SIZE1_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 10000 CUDA}
+\csvautotabular{O3_SIZE1_Cuda.csv}
+
+\subsubsection{Taglia 10000 Seriale}
+\csvautotabular{O3_SIZE1_lc_Serial_min.csv}
+
+\subsubsection{Taglia 100000 MPI}
+\csvautotabular{O3_SIZE2_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 100000 CUDA}
+\csvautotabular{O3_SIZE2_Cuda_min.csv}
+
+\subsubsection{Taglia 100000 Seriale}
+\csvautotabular{O3_SIZE2_lc_Serial_min.csv}
+
+\subsubsection{Taglia 1000000 MPI}
+\csvautotabular{O3_SIZE3_lc_Mpi_min.csv}
+
+\subsubsection{Taglia 1000000 CUDA}
+\csvautotabular{O3_SIZE3_Cuda_min.csv}
+
+\subsubsection{Taglia 1000000 Seriale}
+\csvautotabular{O3_SIZE3_lc_Serial_min.csv}
+\subsection{Conclusioni}
+Per le diverse ottimizzazioni non ci sono cambi sostanziali tra i rapporti di velocità\footnote{Per alcuni campi sembra che MPI sia leggermente meglio del seriale, ma il motivo è dovuto solo al tempo di creazione dell'albero}. Considerando le approssimazioni e il numero di test eseguiti, possiamo concludere che per le tre taglie prese in considerazione la versione seriale dell'algoritmo performa sempre meglio, tenendo anche in considerazione che prima di eseguire la ricerca binaria su MPI linearizziamo l'albero, e che quindi l'algoritmo di ricerca sarà più veloce dato che impiegerà esattamente \(log(n)\) step, e non \(o(logn)\) come nella versione seriale.
+Tra le versione parallele, per le prime due taglie, MPI risulta notevolmente più veloce di CUDA, mentre per la terza taglia CUDA e MPI sono simili. Questo è spiegabile dal fatto che la funzione di ricerca per CUDA (il campo cuda search) ha una durata che è quasi completamente indipendente dalla taglia dell'input (ma rimane la dipendenza data dalla linerizzazione e il trasferminto dell'albero dall'host al device). Questo potrebbe suggerire che la versione CUDA potrebbe ottenere risultati migliori della versione seriale, ma eseguendo alcune iterazione dell'algoritmo, questo non sembra risultare vero neanche per un albero di 1Gb\footnote{risultati disponibili nella cartella TEST1GB, risultati di 5 iterazioni ottimizzazione O3} (risultato aspettabile data la nutara logaritmica del problema).
+CUDA può ottenere dei risultati migliori quando l'operazione di comprazione tra dati è molto complessa (visto che cuda controlla con una memcmp), ma proseguire per questa strada sarebbe una forzatura, perché qualsiasi sia il dato gli si può sempre associare una chiave univoca intera da usare per le comporazioni.
+
+
+
+\newpage
+\section{Come eseguire il codice}
+Il codice per essere compilato ha bisogno di una libreria MPI, di OpenMP, del compilatore Nvidia NVCC, di una GPU Nvidia e di Python.
+Se si intende anche generare i CSV da cui sono state create le cartelle c'è anche bisogno della libreria Python Panda ( installabile con il comando 'pip install pandas' ).
+Inoltre prima di provare ad eseguire il codice è necessario modificare le variabili nel Makefile per assicurarsi che sono compatibili col sistema dove verrà compilato e eseguito il progetto.
+Ad esempio, io utilizzo un sistema Windows, ed utilizzo come libreria MPI la libreria MPI di Microsoft, e quindi le variabili per il mio sistema sono definite in questo modo:
+\begin{lstlisting}[language = bash, escapeinside={(*@}{@*)}]
+# COMPILATORE C
+CC = C:/MinGW64/mingw64/bin/gcc.exe
+# MPI WRAPPER (SE PRESENTE ASSICURARSI CHE IL WRAPPER UTILIZZI LO STESSO COMPILATORE DI CC)
+MPICC = C:/MinGW64/mingw64/bin/gcc.exe
+# FLAG MPI (SE NON SI USA IL WRAPPER CONFIGURARLE CON I PATH CORRETTI, ALTRIMENTI LASCIARE VUOTA)
+MPICC_FLAGS = -I"C:\\Program Files (x86)\\Microsoft SDKs\\MPI\\Include\\" -L"C:\\Program Files (x86)\\Microsoft SDKs\\MPI\\Lib\\x64\\" -lmsmpi
+# IL COMANDO PER ESEGUIRE MPI
+EXECUTE = mpiexec -n 
+NVCC = nvcc
+# LA MIA GPU HA UNA CC 8.6 QUINDI:
+NVCC_FLAGS = -arch=compute_86 -code=sm_86
+\end{lstlisting}
+Inoltre si possono anche modificare le variabile per l'esecuzione dei test, cambiando il numero di nodi e il numero di iterazioni. 
+I test sono stati eseguiti con le seguente variabili:
+\begin{lstlisting}[language = bash , escapeinside={(*@}{@*)}]
+NODES = 10000 100000 1000000 
+PROCESSES = 1 2 4 6 8
+# LA VARIABILE OMP_THREADS DEVE ESSERE UNA POTENZA DI DUE
+OMP_THREADS = 1 4 8 16 
+ITERATION = 50
+# IL CODICE E' STATO TESTATO PER QUESTE OTTIMIZZAZIONI
+# SI POSSONO TESTARE ANCHE ALTRE OTTIMIZZAZIONI, MA NON GARANTISCO IL FUNZIONAMENTO
+OPTIMIZATIONS = O0 O1 O2 O3
+# PER CUDA
+THREADS_PER_BLOCK = 256 512 1024
+\end{lstlisting}
+
+Quindi, dopo aver modificato le variabile del Makefile, per eseguire il codice:
+\begin{enumerate}
+    \item Locarsi nella cartella del progetto dove è presente il file Makefile
+    \item Eseguire da terminale il comando 'make all', per compilare e generare gli eseguibili dell'intero progetto
+    \item Eseguire da terminale il comando 'make test', per eseguire i test
+    \item A questo punto la cartella 'results' dovrebbe essere popolata con i CSV con i dati grezzi, divisi per taglia ottimizzazione e tipo. 
+    \item A questo punto la cartella 'tables' dovrebbe essere popolata con i CSV con i dati aggregati, divisi per taglia ottimizzazione e tipo. 
+    \item Eseguire da terminale il comando 'make clean', se si intende cancellare la build del progetto, i  risultati grezzi e le tabelle.
+\end{enumerate}
+
+\section{Codice Sorgente}
+La documentazione del codice sorgente ed il codice sorgente stesso è disponibile anche online al seguente link:
+\href{https://hpcunisa20232024sessa.surge.sh/md__r_e_a_d_m_e.html}{https://hpcunisa20232024sessa.surge.sh/}.
+
+Di seguito riporto le parti di codice che considero più importanti.
+
+\subsection{OpenMP, Linearizzazione}
+\begin{lstlisting}[language = C]
+    /**
+ * @brief Creates a sorted array of the nodes in the tree and fills the mydata
+ * array passed as paramaters with the nodes data. Uses OpenMP if threads > 1
+ * @param rbt Pointer to the Red-black Tree structure
+ * @param threads Number of threads to use in the linearization process.
+ * Has to be a power 2.
+ * @param data_array Pointer to the mydata array that has to be filled with the
+ * node's data.
+ * @return Retruns a sorted array of the nodes contained in the tree
+ * @note before running rb_node_array set_counts should be runned
+ */
+rbnode **rb_node_array(rbtree *rbt, int threads, mydata *data_array)
+{
+
+	/* index to traverse the tree */
+	int index = 0;
+	/* sorted array of the node of the tree to be returned */
+	rbnode **result_array = (rbnode **)malloc(sizeof(rbnode *) * rbt->count + 1);
+
+	if (threads == 1)
+	{
+		traversal(rbt, RB_FIRST(rbt), result_array, data_array, &index);
+		return result_array;
+	}
+
+	/* num of nodes that are above the level log2(threads) */
+	int excluded_nodes_num = threads - 1;
+
+	rbnode **excluded_nodes = (rbnode **)malloc(sizeof(rbnode *) * excluded_nodes_num);
+	rbnode **included_roots = (rbnode **)malloc(sizeof(rbnode *) * threads);
+
+	/* per assumption this will be a power two so log2(threads) will be an integer */
+	int level_searched = log2(threads);
+	int included_index = 0;
+	int excluded_index = 0;
+
+	/* set the subroots from where to start the parallel execution of trasversal + save the excluded nodes*/
+	set_roots(rbt, RB_FIRST(rbt), level_searched, 0, included_roots, excluded_nodes, &included_index, &excluded_index);
+	/* sort the excluded nodes */
+	sort_node_array(rbt, excluded_nodes, excluded_nodes_num); 
+
+
+	/* offset at which each thread should start writing on the result_array*/
+	int *offset = (int *)malloc(sizeof(int) * threads);
+	offset[0] = 0; /* first thread starts from 0*/
+
+	/* putting the excluded nodes in the right place in the result_array and data_array + setting the offset*/
+	for (int i = 1; i < threads; i++)
+	{
+		/* the offset of the i-thread is the offset of the i-1 thread + the number of nodes it will handle plus one
+		because between each each area that will be filled by the thread there is an excluded node to be put in*/
+		offset[i] = offset[i - 1] + included_roots[i - 1]->count + 1;
+		// putting in the excluded node
+		result_array[offset[i - 1] + included_roots[i - 1]->count] = excluded_nodes[i - 1];
+		// putting in the data of the excluded nodes
+		data_array[offset[i - 1] + included_roots[i - 1]->count] = *(mydata *)excluded_nodes[i - 1]->data;
+	}
+
+	/* Using omp parallel to share the work between threads, each threads start from a different node  based on his id*/
+#pragma omp parallel shared(result_array, offset, included_roots) private(index) num_threads(threads)
+	{
+		/* index is private, so each thread can modify it*/
+		/* result_array can be shared because threads will not overlap each others, same thing for offset and included_roots, who are 
+		also read only */
+
+		// each thread gets its id
+		int thread_id = omp_get_thread_num();
+		
+		// each thread gets its node from where to start
+		rbnode *myroot = included_roots[thread_id];
+
+		// each thread sets the right value from where to start for the index, so to not overlap eachothers
+		index = offset[thread_id];
+
+		// call to the in-order traversal, that also fills the result and data array
+		traversal(rbt, myroot, result_array, data_array, &index);
+	}
+
+	return result_array;
+};
+\end{lstlisting}
+\newpage
+\begin{lstlisting}[language = C]
+    /**
+ * @brief Helper function for rb_node_array. It fills two array, one with the nodes at a certain level and the other with the nodes at a previous level
+ * @param rbt Pointer to the Red-black Tree structure
+ * @param node Pointer to the Root of the Red-black tree
+ * @param level Level where to take the nodes to fill the node_array
+ * @param currentLevel level from where to start the operation (It has to be 0)
+ * @param node_array array to contain the pointer of the nodes at the searched level
+ * @param excluded array to contain the pointer of the nodes at the previous levels
+ * @param included_index pointer to the included_index. (It has to start with an a value of 0)
+ * @param exclude_index pointer to the exclude_index. (It has to start with an a value of 0)
+ * 
+*/
+void set_roots(rbtree *rbt, rbnode *node, int level, int currentLevel, rbnode **node_array, rbnode **excluded, int *included_index, int *excluded_index)
+{
+	// if the node is null or we surpassed the current level we are done
+	// base case
+	if (node == RB_NIL(rbt) || currentLevel > level)
+		return;
+
+	if (currentLevel == level)
+	{
+		// first the node_array is accessed at the value included_index points to and then gets increased
+		node_array[(*included_index)++] = node;
+		return;
+	}
+	// we also save the excluded roots
+	excluded[(*excluded_index)++] = node;
+	// recursive call, we go down a level, so currentLevel + 1
+	set_roots(rbt, node->left, level, currentLevel + 1, node_array, excluded, included_index, excluded_index);
+	set_roots(rbt, node->right, level, currentLevel + 1, node_array, excluded, included_index, excluded_index);
+}
+    
+\end{lstlisting}
+\newpage
+
+\subsection{CUDA}
+\begin{lstlisting}[language = C]
+    /**
+ * @brief Cuda version of rb_find
+ * @param rbt pointer to the red-black-tree
+ * @param data pointer to the searched data
+ * @return Returns pointer to the node that contains the searched data, NULL if not found
+ */
+rbnode *d_rb_find(rbtree *rbt, void *data)
+{
+  /* time variables */
+  cudaEvent_t start, stop;
+  clock_t start_d, end_d;
+
+  /* we set the count variable of the nodes at log2(omp_num_threads),
+    the rbt tree implementation could be changed so that this is an operation done during the insert, but 
+    this was not done, so I have to call this function. I choose to not time it in the tree linearization */
+  set_counts(rbt,RB_FIRST(rbt),log2(omp_threads),0);
+  start_d = clock();
+  cuda_search_start = clock();
+  //mydata *h_data_array = (mydata*)malloc(sizeof(mydata) * rbt->count );
+  mydata *h_data_array;
+  cudaMallocHost((void **)&h_data_array, ( sizeof(mydata) * rbt->count ));
+  cudaCheckError();
+  //linearizing tree
+  rbnode **h_node_array = rb_node_array(rbt, omp_threads,h_data_array);
+
+  end_d = clock();
+  tree_linearization_time =  ((double)(end_d - start_d)) / CLOCKS_PER_SEC;
+
+  /*
+   * the node h_node_array[i] contains data that has the same value as
+   * the data h_data_array[i]
+   * mydata * test =(mydata*) h_node_array[3]->data;
+   * printf("h_node_array[3] contiene : %d\n",test->key);
+   * printf("h_data_array[3] contiene : %d\n",h_data_array[3].key);
+   */
+
+  /* device variables */
+  mydata *d_data_array;
+
+  /* start timing the search */
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  cudaEventRecord(start);
+
+  /* device allocations */
+  cudaMalloc((void **)&d_data_array, rbt->count * sizeof(mydata));
+  cudaCheckError();
+
+  /* copying the data from host to device */
+  cudaMemcpy(d_data_array, h_data_array, rbt->count * sizeof(mydata), cudaMemcpyHostToDevice);
+  cudaCheckError();
+
+  /* setting up the kernel */
+  /* number of threads for each block, we try 256,512,1024*/
+  int threadsPerBlock = number_of_threads_per_block;
+  /* we are working with a one dimensional array, so the blocks will be one dimension also */
+  int blocksPerGrid = (rbt->count + threadsPerBlock - 1) / threadsPerBlock;
+  /* to write the result to file later*/
+  number_of_blocks = blocksPerGrid;
+
+  /* invoking kernel */
+  /* the device where to code has been tested has 8GB of memory and enough thread to handle every input test size,
+  so only one execution of the kernel is necessary */
+  d_find<<<blocksPerGrid, threadsPerBlock>>>(d_data_array, (*(mydata *)data));
+  cudaDeviceSynchronize();
+  cudaCheckError();
+
+  /* copying the result on the host result array*/
+  int found_index;
+  rbnode *ret = NULL;
+  /* copying from the device symbol (like a global variable for the device)*/
+  cudaMemcpyFromSymbol(&found_index, d_found_index, sizeof(int));
+  cudaCheckError();
+ 
+  if (found_index != -1)
+    ret = h_node_array[found_index];
+
+  /* ret points to the searched node (if found), at this point d_rb_find is done the rest is just timing and frees*/
+  /* end timing */
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+
+  float gpu_time;
+  cudaEventElapsedTime(&gpu_time, start, stop);
+  gpu_time_sec = gpu_time / 1000.0;
+
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+  cudaFree(d_data_array);
+  cudaFree(h_data_array);
+  free(h_node_array);
+
+  return ret;
+}
+
+/**
+ * @brief Kernel, Every thread checks a node doing a memcmp, bypassing the normal compare function
+ * @param data_array array of the data contained in the red-black tree.
+ * @param searched_data the searched data.
+ * @note Every thread checks an element of the data array based on his index with memcmp, if it correspond to the searched data
+ * it changes the value of the device symbol d_found_index to its index, no need to worry about race conditions because the element is unique in the tree
+ */
+__global__ void d_find(const mydata *data_array, const mydata searched_data)
+{
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  
+
+  if (d_memcmp(&searched_data, &data_array[index], sizeof(mydata)) == SUCCESS)
+  {
+    d_found_index = index; //no need for atomExch, each element is unique
+  }
+  
+  // this is faster, but less generic
+  // if(data_array[index].key == searched_data.key) d_found_index = index;
+}
+
+/**
+ * @brief memcmp implementation for the device
+ * @param s2 Pointer to the first memory block to be compared
+ * @param s1 Pointer to the second memory block to be compared
+ * @param n Number of bytes to be compared.
+ * @note memcmp is public domain
+ */
+__device__ int d_memcmp(const void *s1, const void *s2, size_t n)
+{
+  const unsigned char *us1 = (const unsigned char *)s1;
+  const unsigned char *us2 = (const unsigned char *)s2;
+  while (n-- != 0)
+  {
+    if (*us1 != *us2)
+    {
+      return -1; // we do not care about order so i avoided the if that was here
+    }
+    us1++;
+    us2++;
+  }
+  return SUCCESS;
+}
+
+\end{lstlisting}
+
+\subsection{MPI}
+\begin{lstlisting}[language = C]
+mydata *mypart = (mydata *)malloc(sizeof(mydata) * elem_per_process + 1);
+
+  if (rank == 0)
+    start_time = MPI_Wtime();
+  /* this are collective operations, so each process has to call this functions */
+  /* broadcast the searched data */
+  MPI_Bcast(&query, 1, MPI_MYDATA, 0, MPI_COMM_WORLD);
+  /* scatter the data_array, each process receives only part of the data_array */
+  MPI_Scatterv(data_array, count, displacementsv, MPI_MYDATA, mypart, count[rank], MPI_MYDATA, 0, MPI_COMM_WORLD);
+
+  if (rank == 0)
+  {
+    end_time = MPI_Wtime();
+    communication_time += end_time - start_time;
+    free(data_array);
+  }
+
+  start_time = MPI_Wtime();
+  // the binary search returns the index where the searched data was found
+  int index = binarySearch(mypart, query, 0, count[rank]);
+  end_time = MPI_Wtime();
+  binary_search_time = end_time - start_time;
+
+  // rank0 is the master process, so it will check wich process has found the data
+  // in our case is always the last one, so that we can time the binary search for the worst case where the data is not found
+  // (worst case does not mean a lot in MPI, because each process has to wait for the slowest process to finish to terminate the execution)
+  if (rank == 0)
+  {
+    start_time = MPI_Wtime();
+    MPI_Gather(&index, 1, MPI_INT, result_array, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  }
+  else
+  {
+    MPI_Gather(&index, 1, MPI_INT, NULL, 0, MPI_INT, 0, MPI_COMM_WORLD);
+    // the processes that are not rank0 can terminate now
+    free(mypart);
+    MPI_Finalize();
+    return 0;
+  }
+  //int founded_flag = -1;
+  if (rank == 0)
+  {
+    end_time = MPI_Wtime();
+    communication_time += end_time - start_time;
+    for (int i = 0; i < number_of_processes; i++)
+    {
+      // iterate over the result array, if a process has not found the element it sends -1
+      // when the element is different than -1 it means the element was found
+      if (result_array[i] != -1)
+      {
+        //printf("FOUND BY %d",i);
+        // Accounting for displacements
+        index = result_array[i] + displacementsv[i];
+
+        end_time = MPI_Wtime();
+
+        /* verify the result with sequential implementation */
+        total_time = end_time - total_start;
+        rbnode *to_assert = rb_find(rbt, &query);
+        assert(to_assert == node_array[index]);
+        //founded_flag = 1;
+        break;
+      }
+    }
+  }
+    
+\end{lstlisting}
+\subsection{Crediti}
+Crediti per la macro cudaCheckError():
+\href{https://gist.github.com/jefflarkin/5390993}{https://gist.github.com/jefflarkin/5390993}\cite{CudaMacro}
+
+Crediti per l'implementazione del Red-Black Tree in C:
+\href{https://github.com/xieqing/red-black-tree}{https://github.com/xieqing/red-black-tree}\cite{RBTree}
+
+
+    
+
+
+\printbibliography
+\vspace*{\fill}
+This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 
+International License. To view a copy of this license, visit https://creativecommons.org/licenses/by-nc-sa/4.0/
+\end{document}
